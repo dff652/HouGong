@@ -858,24 +858,26 @@ def wake_agent(agent_id, message=''):
 
 # ══ Agent 实时活动读取 ══
 
-# 状态 → agent_id 映射
-_STATE_AGENT_MAP = {
-    'Taizi': 'taizi',
-    'Zhongshu': 'zhongshu',
-    'Menxia': 'menxia',
-    'Assigned': 'shangshu',
-    'Doing': None,         # 六部，需从 org 推断
-    'Review': 'shangshu',
-    'Next': None,          # 待执行，从 org 推断
-    'Pending': 'zhongshu', # 待处理，默认中书省
-}
-_ORG_AGENT_MAP = {
-    '礼部': 'libu', '户部': 'hubu', '兵部': 'bingbu',
-    '刑部': 'xingbu', '工部': 'gongbu', '吏部': 'libu_hr',
-    '中书省': 'zhongshu', '门下省': 'menxia', '尚书省': 'shangshu',
-}
+import sys
+sys.path.append(str(BASE_DIR))
+from scripts.topology_parser import get_current_topology
 
-_TERMINAL_STATES = {'Done', 'Cancelled'}
+def _get_topology_maps():
+    topology = get_current_topology()
+    state_agent_map = {k: v['agent_id'] for k, v in topology.get('states', {}).items() if v['agent_id']}
+    if 'Pending' not in state_agent_map:
+        state_agent_map['Pending'] = state_agent_map.get('Zhongshu', 'zhongshu')
+    if 'Taizi' not in state_agent_map:
+        state_agent_map['Taizi'] = 'taizi'
+        
+    org_agent_map = {}
+    for aid, label in topology.get('pool', {}).items():
+        org_agent_map[label] = aid
+    for aid, label in topology.get('agent_to_label', {}).items():
+        org_agent_map[label] = aid
+    return topology, state_agent_map, org_agent_map
+
+_TERMINAL_STATES = {'Done', 'Cancelled', 'ColdPalace'}
 
 
 def _parse_iso(ts):
@@ -1660,9 +1662,11 @@ def get_task_activity(task_id):
     }
 
     # 当前负责 Agent（兼容旧逻辑）
-    agent_id = _STATE_AGENT_MAP.get(state)
-    if agent_id is None and state in ('Doing', 'Next'):
-        agent_id = _ORG_AGENT_MAP.get(org)
+    topology, state_agent_map, org_agent_map = _get_topology_maps()
+    agent_id = state_agent_map.get(state)
+    st_def = topology.get('states', {}).get(state, {})
+    if agent_id is None and (st_def.get('is_routing') or state in ('Doing', 'Executing', 'Next')):
+        agent_id = org_agent_map.get(org)
 
     # ── 构建活动条目列表（flow_log + progress_log）──
     activity = []
@@ -1885,10 +1889,12 @@ _STATE_LABELS = {
 
 def dispatch_for_state(task_id, task, new_state, trigger='state-transition'):
     """推进/审批后自动派发对应 Agent（后台异步，不阻塞响应）。"""
-    agent_id = _STATE_AGENT_MAP.get(new_state)
-    if agent_id is None and new_state in ('Doing', 'Next'):
+    topology, state_agent_map, org_agent_map = _get_topology_maps()
+    agent_id = state_agent_map.get(new_state)
+    st_def = topology.get('states', {}).get(new_state, {})
+    if agent_id is None and (st_def.get('is_routing') or new_state in ('Doing', 'Executing', 'Next')):
         org = task.get('org', '')
-        agent_id = _ORG_AGENT_MAP.get(org)
+        agent_id = org_agent_map.get(org)
     if not agent_id:
         log.info(f'ℹ️ {task_id} 新状态 {new_state} 无对应 Agent，跳过自动派发')
         return
@@ -2079,9 +2085,43 @@ class Handler(BaseHTTPRequestHandler):
         cors_headers(self)
         self.end_headers()
 
+THEME_HOUGONG_MAP = {
+    '中书省': '皇后',
+    '门下省': '皇太后',
+    '尚书省': '皇贵妃',
+    '户部': '算妃',
+    '礼部': '书妃',
+    '兵部': '将妃',
+    '刑部': '戒妃',
+    '工部': '阵妃',
+    '吏部': '掌事姑姑',
+    '太子': '敬事房',
+    '钦天监': '请安太监',
+    '朝报官': '请安太监',
+    '三省六部': '三宫六院',
+    '军机处': '养心殿',
+    '奏折阁': '起居注',
+    '天下要闻': '各宫请安',
+    '官员总览': '后宫总览',
+    '六部': '六院',
+    '官员': '嫔妃',
+    '中书令': '中宫',
+    '侍中': '慈宁宫',
+    '尚书令': '协理六宫',
+}
+
+def translate_to_hougong(text: str) -> str:
+    for k, v in THEME_HOUGONG_MAP.items():
+        text = text.replace(k, v)
+    return text
+
     def send_json(self, data, code=200):
         try:
             body = json.dumps(data, ensure_ascii=False).encode()
+            if 'edictTheme=hougong' in self.headers.get('Cookie', ''):
+                body_str = body.decode('utf-8')
+                body_str = translate_to_hougong(body_str)
+                body = body_str.encode('utf-8')
             self.send_response(code)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -2097,6 +2137,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             body = path.read_bytes()
+            if 'text' in mime or 'javascript' in mime or 'json' in mime:
+                if 'edictTheme=hougong' in self.headers.get('Cookie', ''):
+                    try:
+                        body_str = body.decode('utf-8')
+                        body_str = translate_to_hougong(body_str)
+                        body = body_str.encode('utf-8')
+                    except UnicodeDecodeError:
+                        pass
             self.send_response(200)
             self.send_header('Content-Type', mime)
             self.send_header('Content-Length', str(len(body)))
@@ -2237,6 +2285,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({'ok': True, 'message': '订阅配置已保存'})
             return
 
+        if p == '/api/switch-theme':
+            theme = body.get('theme', '').strip()
+            if theme not in ('shengbu', 'hougong'):
+                self.send_json({'ok': False, 'error': f'Invalid theme: {theme}'}, 400)
+                return
+            try:
+                (DATA / 'active_mode.txt').write_text(theme, encoding='utf-8')
+                result = subprocess.run(['python3', str(SCRIPTS / 'switch_theme.py'), theme], capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    self.send_json({'ok': True, 'message': f'Switched to {theme} theme'})
+                else:
+                    self.send_json({'ok': False, 'error': result.stderr or result.stdout}, 500)
+            except Exception as e:
+                self.send_json({'ok': False, 'error': f'Theme switch failed: {e}'}, 500)
+            return
+
         if p == '/api/scheduler-scan':
             threshold_sec = body.get('thresholdSec', 180)
             try:
@@ -2278,6 +2342,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({'ok': False, 'error': 'taskId required'}, 400)
                 return
             self.send_json(handle_scheduler_rollback(task_id, reason))
+            return
+
+        if p == '/api/topology':
+            try:
+                self.send_json(get_current_topology())
+            except Exception as e:
+                self.send_json({'ok': False, 'error': str(e)}, 500)
             return
 
         if p == '/api/morning-brief/refresh':

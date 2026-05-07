@@ -185,7 +185,7 @@ def main():
             'tasks_active': ts['tasks_active'],
             'flow_participations': ts['flow_participations'],
             'participated_edicts': ts['participated_edicts'],
-            'merit_score': ts['tasks_done']*10 + ts['flow_participations']*2 + min(ss['sessions'],20),
+            'merit_score': ts['tasks_done']*10 + ts['flow_participations']*2 + min(ss['sessions'],20) - (20 if hb['status'] == 'stalled' else 0),
         })
 
     result.sort(key=lambda x: x['merit_score'], reverse=True)

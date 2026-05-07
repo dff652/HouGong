@@ -34,32 +34,28 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message
 # 文件锁 —— 防止多 Agent 同时读写 tasks_source.json
 from file_lock import atomic_json_read, atomic_json_update, atomic_json_write  # noqa: E402
 
-STATE_ORG_MAP = {
-    'Taizi': '太子', 'Zhongshu': '中书省', 'Menxia': '门下省', 'Assigned': '尚书省',
-    'Doing': '执行中', 'Review': '尚书省', 'Done': '完成', 'Blocked': '阻塞',
-}
+import sys, os
+sys.path.append(os.path.dirname(__file__))
+from topology_parser import get_current_topology
 
-_STATE_AGENT_MAP = {
-    'Taizi': 'main',
-    'Zhongshu': 'zhongshu',
-    'Menxia': 'menxia',
-    'Assigned': 'shangshu',
-    'Review': 'shangshu',
-    'Pending': 'zhongshu',
-}
+_TOPOLOGY = get_current_topology()
 
-_ORG_AGENT_MAP = {
-    '礼部': 'libu', '户部': 'hubu', '兵部': 'bingbu',
-    '刑部': 'xingbu', '工部': 'gongbu', '吏部': 'libu_hr',
-    '中书省': 'zhongshu', '门下省': 'menxia', '尚书省': 'shangshu',
-}
+STATE_ORG_MAP = {k: v['label'] for k, v in _TOPOLOGY.get('states', {}).items()}
+STATE_ORG_MAP['Done'] = '完成'
+STATE_ORG_MAP['Blocked'] = '阻塞'
 
-_AGENT_LABELS = {
-    'main': '太子', 'taizi': '太子',
-    'zhongshu': '中书省', 'menxia': '门下省', 'shangshu': '尚书省',
-    'libu': '礼部', 'hubu': '户部', 'bingbu': '兵部', 'xingbu': '刑部',
-    'gongbu': '工部', 'libu_hr': '吏部', 'zaochao': '钦天监',
-}
+_STATE_AGENT_MAP = {k: v['agent_id'] for k, v in _TOPOLOGY.get('states', {}).items() if v['agent_id']}
+# Compatibility mappings if using older structures
+if 'Pending' not in _STATE_AGENT_MAP:
+    _STATE_AGENT_MAP['Pending'] = _STATE_AGENT_MAP.get('Zhongshu', 'zhongshu')
+
+_ORG_AGENT_MAP = {}
+for aid, label in _TOPOLOGY.get('pool', {}).items():
+    _ORG_AGENT_MAP[label] = aid
+for aid, label in _TOPOLOGY.get('agent_to_label', {}).items():
+    _ORG_AGENT_MAP[label] = aid
+
+_AGENT_LABELS = _TOPOLOGY.get('agent_to_label', {})
 
 MAX_PROGRESS_LOG = 100  # 单任务最大进展日志条数
 
@@ -144,7 +140,9 @@ def _infer_agent_id_from_runtime(task=None):
         state = task.get('state', '')
         org = task.get('org', '')
         aid = _STATE_AGENT_MAP.get(state)
-        if aid is None and state in ('Doing', 'Next'):
+        # Check if this state is a routing state
+        st_def = _TOPOLOGY.get('states', {}).get(state, {})
+        if aid is None and (st_def.get('is_routing') or state in ('Doing', 'Executing', 'Next')):
             aid = _ORG_AGENT_MAP.get(org)
         if aid:
             return aid

@@ -33,6 +33,7 @@ export const api = {
   morningBrief: () => fetchJ<MorningBrief>(`${API_BASE}/api/morning-brief`),
   morningConfig: () => fetchJ<SubConfig>(`${API_BASE}/api/morning-config`),
   agentsStatus: () => fetchJ<AgentsStatusData>(`${API_BASE}/api/agents-status`),
+  topology: () => fetchJ<any>(`${API_BASE}/api/topology`),
 
   // 任务实时动态
   taskActivity: (id: string) =>

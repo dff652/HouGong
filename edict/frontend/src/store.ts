@@ -18,42 +18,56 @@ import {
 
 // ── Pipeline Definition (PIPE) ──
 
-export const PIPE = [
-  { key: 'Inbox',    dept: '皇上',   icon: '👑', action: '下旨' },
-  { key: 'Taizi',    dept: '太子',   icon: '🤴', action: '分拣' },
-  { key: 'Zhongshu', dept: '中书省', icon: '📜', action: '起草' },
-  { key: 'Menxia',   dept: '门下省', icon: '🔍', action: '审议' },
-  { key: 'Assigned', dept: '尚书省', icon: '📮', action: '派发' },
-  { key: 'Doing',    dept: '六部',   icon: '⚙️', action: '执行' },
-  { key: 'Review',   dept: '尚书省', icon: '🔎', action: '汇总' },
-  { key: 'Done',     dept: '回奏',   icon: '✅', action: '完成' },
-] as const;
+export let PIPE: { key: string; dept: string; icon: string; action: string }[] = [];
+export let PIPE_STATE_IDX: Record<string, number> = {};
+export let STATE_LABEL: Record<string, string> = {};
 
-export const PIPE_STATE_IDX: Record<string, number> = {
-  Inbox: 0, Pending: 0, Taizi: 1, Zhongshu: 2, Menxia: 3,
-  Assigned: 4, Doing: 5, Review: 6, Done: 7, Blocked: 5, Cancelled: 5, Next: 4,
-};
+export async function initTopology() {
+  const topo = await api.topology();
+  PIPE = [];
+  PIPE_STATE_IDX = {};
+  STATE_LABEL = {
+    Done: '已完成', Cancelled: '已取消', Blocked: '阻塞', Next: '待执行', ColdPalace: '冷宫'
+  };
 
-export const DEPT_COLOR: Record<string, string> = {
-  '太子': '#e8a040', '中书省': '#a07aff', '门下省': '#6a9eff', '尚书省': '#6aef9a',
-  '礼部': '#f5c842', '户部': '#ff9a6a', '兵部': '#ff5270', '刑部': '#cc4444',
-  '工部': '#44aaff', '吏部': '#9b59b6', '皇上': '#ffd700', '回奏': '#2ecc8a',
-};
+  let idx = 0;
+  for (const st of topo.columns) {
+    if (['Done', 'Blocked', 'Cancelled', 'ColdPalace'].includes(st)) continue;
+    const def = topo.states[st];
+    let action = '流转';
+    if (st === 'Inbox') action = '下旨';
+    else if (st === 'Taizi' || st === 'RoyalReview') action = '分拣';
+    else if (st.includes('Zhongshu') || st === 'CentralPalace') action = '规划';
+    else if (st === 'Doing' || st === 'Executing') action = '执行';
+    else if (st === 'Review' || st === 'Summary') action = '汇总';
 
-export const STATE_LABEL: Record<string, string> = {
-  Inbox: '收件', Pending: '待处理', Taizi: '太子分拣', Zhongshu: '中书起草',
-  Menxia: '门下审议', Assigned: '已派发', Doing: '执行中', Review: '待审查',
-  Done: '已完成', Blocked: '阻塞', Cancelled: '已取消', Next: '待执行',
-};
+    PIPE.push({
+      key: st,
+      dept: def?.label || st,
+      icon: def?.is_routing ? '⚙️' : '📜',
+      action
+    });
+    PIPE_STATE_IDX[st] = idx++;
+  }
+
+  for (const [k, v] of Object.entries(topo.states)) {
+    STATE_LABEL[k] = (v as any)?.label || k;
+  }
+}
 
 export function deptColor(d: string): string {
-  return DEPT_COLOR[d] || '#6a9eff';
+  if (d.includes('中书') || d.includes('皇后')) return '#a07aff';
+  if (d.includes('太子') || d.includes('敬事房')) return '#e8a040';
+  if (d.includes('门下') || d.includes('太后')) return '#6a9eff';
+  if (d.includes('尚书') || d.includes('贵妃')) return '#6aef9a';
+  if (d.includes('皇上')) return '#ffd700';
+  return '#44aaff';
 }
 
 export function stateLabel(t: Task): string {
   const r = t.review_round || 0;
   if (t.state === 'Menxia' && r > 1) return `门下审议（第${r}轮）`;
-  if (t.state === 'Zhongshu' && r > 0) return `中书修订（第${r}轮）`;
+  if (t.state === 'Zhongshu' && r > 0) return `中书起草（第${r}轮）`;
   return STATE_LABEL[t.state] || t.state;
 }
 
@@ -66,7 +80,7 @@ export function isSession(t: Task): boolean {
 }
 
 export function isArchived(t: Task): boolean {
-  return t.archived || ['Done', 'Cancelled'].includes(t.state);
+  return t.archived || ['Done', 'Cancelled', 'ColdPalace'].includes(t.state);
 }
 
 export type PipeStatus = { key: string; dept: string; icon: string; action: string; status: 'done' | 'active' | 'pending' };
@@ -86,31 +100,31 @@ export type TabKey =
   | 'skills' | 'sessions' | 'memorials' | 'templates' | 'morning';
 
 export const TAB_DEFS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'edicts',    label: '旨意看板', icon: '📜' },
-  { key: 'monitor',   label: '省部调度', icon: '🏛️' },
+  { key: 'edicts', label: '旨意看板', icon: '📜' },
+  { key: 'monitor', label: '省部调度', icon: '🏛️' },
   { key: 'officials', label: '官员总览', icon: '👔' },
-  { key: 'models',    label: '模型配置', icon: '🤖' },
-  { key: 'skills',    label: '技能配置', icon: '🎯' },
-  { key: 'sessions',  label: '小任务',   icon: '💬' },
-  { key: 'memorials', label: '奏折阁',   icon: '📜' },
-  { key: 'templates', label: '旨库',     icon: '📋' },
-  { key: 'morning',   label: '天下要闻', icon: '🌅' },
+  { key: 'models', label: '模型配置', icon: '🤖' },
+  { key: 'skills', label: '技能配置', icon: '🎯' },
+  { key: 'sessions', label: '小任务', icon: '💬' },
+  { key: 'memorials', label: '奏折阁', icon: '📜' },
+  { key: 'templates', label: '旨库', icon: '📋' },
+  { key: 'morning', label: '天下要闻', icon: '🌅' },
 ];
 
 // ── DEPTS for monitor ──
 
 export const DEPTS = [
-  { id: 'taizi',    label: '太子',   emoji: '🤴', role: '太子',     rank: '储君' },
-  { id: 'zhongshu', label: '中书省', emoji: '📜', role: '中书令',   rank: '正一品' },
-  { id: 'menxia',   label: '门下省', emoji: '🔍', role: '侍中',     rank: '正一品' },
-  { id: 'shangshu', label: '尚书省', emoji: '📮', role: '尚书令',   rank: '正一品' },
-  { id: 'libu',     label: '礼部',   emoji: '📝', role: '礼部尚书', rank: '正二品' },
-  { id: 'hubu',     label: '户部',   emoji: '💰', role: '户部尚书', rank: '正二品' },
-  { id: 'bingbu',   label: '兵部',   emoji: '⚔️', role: '兵部尚书', rank: '正二品' },
-  { id: 'xingbu',   label: '刑部',   emoji: '⚖️', role: '刑部尚书', rank: '正二品' },
-  { id: 'gongbu',   label: '工部',   emoji: '🔧', role: '工部尚书', rank: '正二品' },
-  { id: 'libu_hr',  label: '吏部',   emoji: '👔', role: '吏部尚书', rank: '正二品' },
-  { id: 'zaochao',  label: '钦天监', emoji: '🌟', role: '朝报官',   rank: '正三品' },
+  { id: 'taizi', label: '太子', emoji: '🤴', role: '太子', rank: '储君' },
+  { id: 'zhongshu', label: '中书省', emoji: '📜', role: '中书令', rank: '正一品' },
+  { id: 'menxia', label: '门下省', emoji: '🔍', role: '侍中', rank: '正一品' },
+  { id: 'shangshu', label: '尚书省', emoji: '📮', role: '尚书令', rank: '正一品' },
+  { id: 'libu', label: '礼部', emoji: '📝', role: '礼部尚书', rank: '正二品' },
+  { id: 'hubu', label: '户部', emoji: '💰', role: '户部尚书', rank: '正二品' },
+  { id: 'bingbu', label: '兵部', emoji: '⚔️', role: '兵部尚书', rank: '正二品' },
+  { id: 'xingbu', label: '刑部', emoji: '⚖️', role: '刑部尚书', rank: '正二品' },
+  { id: 'gongbu', label: '工部', emoji: '🔧', role: '工部尚书', rank: '正二品' },
+  { id: 'libu_hr', label: '吏部', emoji: '👔', role: '吏部尚书', rank: '正二品' },
+  { id: 'zaochao', label: '钦天监', emoji: '🌟', role: '朝报官', rank: '正三品' },
 ];
 
 // ── Templates ──
@@ -341,7 +355,7 @@ export const useStore = create<AppStore>((set, get) => ({
       // Also preload officials for monitor tab
       const s = get();
       if (!s.officialsData) {
-        api.officialsStats().then((d) => set({ officialsData: d })).catch(() => {});
+        api.officialsStats().then((d) => set({ officialsData: d })).catch(() => { });
       }
     } catch {
       // silently fail
